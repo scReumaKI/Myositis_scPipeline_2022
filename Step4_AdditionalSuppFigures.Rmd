@@ -1,0 +1,231 @@
+---
+title: "Figures for Supp"
+output: html_document
+---
+
+```{r,setup, results='hide'}
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(dplyr)
+  library(cowplot)
+  library(ggplot2)
+  library(pheatmap)
+  library(enrichR)
+  library(rafalib)
+  library(ggraph)
+  library(clustree)
+  library(RColorBrewer)
+  library(scales)
+  library(dittoSeq)
+  library(viridis)
+})
+seed=1234
+May2022sce<- readRDS ("May2022sce.rds")
+```
+
+```{r,supp figs, results='hide',fig.width=16,fig.height=5}
+my_cols <- c("0"="#999933","1"="#004949","2"="#009292","3"="#ff6db6","4"="#ffb6db",
+ "5"="#490092","6"="#006ddb","7"="#b66dff","8"="#6db6ff","9"="#b6dbff",
+ "10"="#920000","11"="#924900","12"="#db6d00","13"="burlywood2")
+
+my_cols2<- my_cols[order(as.integer(names(my_cols)))]
+tissue<-c("MUSL"="royalblue3","PB"="seagreen3")
+VlnPlot(May2022sce,features = c("CD4","CD8A","CD8B"),cols = my_cols2)
+
+VlnPlot(May2022sce,features = c("CXCR4","CREM","LMNA"),cols = my_cols2,group.by = "patient_ID")
+```
+
+```{r,supp figs, results='hide',fig.width=16,fig.height=5}
+#comparision of 2 IMNM vs 2 IBM patients
+#IMNM P1 and P2
+#IBM P5 and P6
+
+subtype<-subset(May2022sce,subset=patient_ID=="3",invert=TRUE)
+subtype<-subset(subtype,subset=patient_ID=="4",invert=TRUE)
+subtype<-subset(subtype,subset=patient_ID=="7",invert=TRUE)
+table(subtype$patient_ID) # only patient 1,2,5 and 6 left
+
+subtype<-SetIdent(subtype, value = "dx2020")
+subtypemuscle<-subset(subtype,subset=tissue=="MUSL")
+subtypePB<-subset(subtype,subset=tissue=="PB")
+#Compute differential expression
+genesperdiagnosis_muscle<-FindMarkers(subtypemuscle, ident.1="IBM", ident.2="IMNM",min.diff.pct = 0.2) # min.pct to match the DE in FindAllMarkers
+genesperdiagnosis_muscle$genes<-rownames(genesperdiagnosis_muscle)
+genesperdiagnosis_muscle   %>% top_n(-50, p_val) -> top50_genes_muscle
+genesperdiagnosis_muscle   %>% top_n(-10, p_val) -> top5_genes_muscle
+top5_genes_muscle$genes<-rownames(top5_genes_muscle)
+top50_genes_muscle$genes<-rownames(top50_genes_muscle)
+subtype_muscle.copy <- ScaleData(subtypemuscle, features = as.character(unique(top50_genes_muscle$genes)), assay = "RNA")
+DoHeatmap(subtype_muscle.copy, features = unique(top50_genes_muscle$genes),group.by = "dx2020") + scale_fill_viridis()
+#dittoHeatmap(subtype_muscle.copy,top50_genes_muscle$genes,annot.by = c("dx2020","patient_ID"),annot.colors = c("#999933","#004949","#009292","#ff6db6","#ffb6db","#490092"),scaled.to.max = TRUE, heatmap.colors.max.scaled = colorRampPalette(c("darkblue","mediumaquamarine" ,"yellow"))(25))
+VlnPlot(subtype_muscle.copy,features = c("GNLY","GPR183","S1PR1","SELL","HIF3A","KLF3"),group.by = "dx2020",split.by = "patient_ID")
+write.csv(genesperdiagnosis_muscle,"IBMvsIMNMDEgenesmuscle.csv")
+genesperdiagnosis_PB<-FindMarkers(subtypePB, ident.1="IBM", ident.2="IMNM",min.pct=0.2) # min.pct to match the DE in FindAllMarkers
+genesperdiagnosis_PB$genes<-rownames(genesperdiagnosis_PB)
+genesperdiagnosis_PB   %>% top_n(-50, p_val) -> top50_genes_PB
+genesperdiagnosis_PB   %>% top_n(-5, p_val) -> top5_genes_PB
+top5_genes_PB$genes<-rownames(top5_genes_PB)
+top50_genes_PB$genes<-rownames(top50_genes_PB)
+subtypePB.copy <- ScaleData(subtypePB, features = as.character(unique(top50_genes_PB$genes)), assay = "RNA")
+DoHeatmap(subtypePB.copy, features = unique(top50_genes_PB$genes),group.by = "dx2020")+scale_fill_viridis()
+
+```
+
+#MAIT cells
+Markers: CD161 (KLRB1), IL18R,CCR5, CXCR6, CCR6
+```{r,MAIT Tcells figs, results='hide',fig.width=16,fig.height=5}
+
+FeaturePlot(May2022sce,features = c("KLRB1","IL18R1","CCR5","CXCR6","CCR6"),reduction = "umap_harmony")
+bloodsce<-subset(May2022sce, subset=tissue=="PB")
+saveRDS(bloodsce,"bloodsce.rds")
+
+```
+
+
+#gdT cells
+dataframe produced by Sebastian was used
+g9 d2 V gene usages: innate gdTcells
+Gamma delta T cells expressing the Vg9Vδ2 T cell receptor (TCR) are the most predominant gδ-T cell subset in
+peripheral blood accounting for approximately 1-5 % of all T cells.
+
+```{r,gdTcells figs, results='hide',fig.width=16,fig.height=5}
+alldata<- readRDS ("May2022scewithtreated.rds")
+alldata.naive<-subset(alldata,subset=treatment.status=="naive")
+library(readr)
+gdTcells<- read_delim("expanded_clones_gamma_delta (1).csv", 
+    delim = ";", escape_double = FALSE, trim_ws = TRUE) #for some reason we dont have Plate64_PB_k24 in the sce so I remove this cell from the df
+
+gdTcellnames<-gdTcells$...1
+
+gdTcells.copy<-gdTcells[-c(46),]
+gdTcellnames<-gdTcells.copy$...1
+gdTcell.sce<-subset(alldata.naive, cells = gdTcellnames)
+dim(gdTcell.sce)
+#cellnames<-WhichCells(gdTcell.sce)
+#extracell<-setdiff(gdTcellnames,cellnames)
+
+DimPlot(alldata.naive,cells.highlight = gdTcellnames,split.by = "patient_ID")+ scale_color_manual(labels=c("gdTcells","abTcells"))
+
+gdTcell.sce<-subset(alldata, cells = gdTcellnames)
+#for splitplot remove gdT cell expanded from treated samples
+gdTcell.sce<-AddMetaData(gdTcell.sce,metadata="gdTcell",col.name = "chaininfo")
+cloneinfo<-gdTcells$cloneGD_descr_aa
+gdTcell.sce<-AddMetaData(gdTcell.sce,metadata=gdTcells$cloneGD_descr_aa,col.name = "clone")
+abTcell.sce<-subset(alldata, cells = gdTcellnames,invert=TRUE)
+abTcell.sce<-AddMetaData(abTcell.sce,metadata="abTcell",col.name = "chaininfo")
+alldata.copy<-merge(gdTcell.sce,abTcell.sce)
+alldata.copy<-SetIdent(alldata.copy, value = "chaininfo")
+
+genesperchain<-FindMarkers(alldata.copy, ident.1="gdTcell", ident.2="abTcell",min.diff.pct = 0.2) # min.pct to match the DE in FindAllMarkers
+genesperchain$genes<-rownames(genesperchain)
+genesperchain   %>% top_n(-50, p_val) -> top50_genes
+genesperchain   %>% top_n(-5, p_val) -> top5_genes
+genesperchain   %>% top_n(-10, p_val) -> top10_genes
+
+alldata.copy2 <- ScaleData(alldata.copy, features = as.character(unique(top50_genes$genes)), assay = "RNA")
+DoHeatmap(alldata.copy2, features = unique(top50_genes$genes),group.by = "chaininfo")+scale_fill_viridis()
+
+
+
+
+
+
+clusters<-FetchData(naive,vars = "seurat_clusters")
+
+GdTcell.Vgene<-FetchData(gdTcell.sce,vars=c("G_1_V","G_2_V","D_1_V","D_2_V"))
+infoongdTcells<-FetchData(gdTcell.sce,vars=c("patient_ID","treatment.status"))
+gdTcell.sce<-AddMetaData(gdTcell.sce,gdTcells.copy$cloneGD_descr_aa,col.name="gdCDR3")
+gdTcell.sce<-AddMetaData(gdTcell.sce,gdTcells.copy$freq_cloneGDaa,col.name="gdfreq")
+gdTcell.sce<-AddMetaData(gdTcell.sce,gdTcells.copy$group_cloneGDaa,col.name="gdclone")
+
+ DimPlot(alldata, cells.highlight = gdTcellnames, reduction="umap_harmony", split.by = "patient_ID")+scale_color_manual(labels=c("Tcells","gdTcells"),values=c("gray","red"))A
+
+
+DimPlot(May2022sce,cells.highlight = gdTcellnames, reduction = "umap_harmony",group.by="patient_ID")+ggtitle("gdTcells")
+test_1A_2<-separate(test_1A_2,colname,c("sequence","remove"),sep="00") 
+library(dplyr)
+library(tidyr)
+gdTcells.copy<-separate(gdTcells,X,c("plate","tissue","well"),sep="_")
+gdTcells_muscle<-subset(gdTcells.copy,subset=tissue=="MUSL")
+gdTcells_blood<-subset(gdTcells.copy,subset=tissue=="PB")
+gdTcells_muscle_table<-table(gdTcells_muscle$cloneGD_descr_aa,useNA = "ifany")
+gdTcells_muscle_table<-sort(gdTcells_muscle_table)
+gdTcells_muscle_df<-as.data.frame(gdTcells_muscle_table)
+
+
+colors_gdTcells_muscle<-ifelse((gdTcells_muscle_df$Var1=="{'ALWEGYKKL', 'AFTTFLLRYTDKLI', 'ACDNVAGRFYTDKLI'}"),"darkorchid",
+                               ifelse((gdTcells_muscle_df$Var1=="{'ALWELYYYKKL', 'ALGELSIDWGIEKYTDKLI'}"),"#999933",
+                                      ifelse((gdTcells_muscle_df$Var1=="{'ALWEVHYKKLF', 'ALGEDYGFLTGGPTPYTDKLI'}"),"#006ddb",
+                                             ifelse((gdTcells_muscle_df$Var1=="{'ATWDESYKKLF', 'ALGDLFPGGYTDKLI'}"),"coral3","grey"))))
+
+
+pie(gdTcells_muscle_df$Freq,label=gdTcells_muscle_df$Freq,col = colors_gdTcells_muscle)
+
+gdTcells_blood_table<-table(gdTcells_blood$cloneGD_descr_aa,useNA = "ifany")
+gdTcells_blood_table<-sort(gdTcells_blood_table)
+gdTcells_blood_df<-as.data.frame(gdTcells_blood_table)
+
+#{'ALWEGYKKL', 'AFTTFLLRYTDKLI', 'ACDNVAGRFYTDKLI'} 9 darkorchid
+#{'ALWEEKKELGKKIKV', 'ACDTVGGSPDKLI'} 4 
+#{'ALGELQHQFPHRGYGTDKLI', 'ALWEVRYKKLF'} 2
+#{'ALWEDQELGKKIKV', 'ACDTAGGRGWDTRQM'} 2
+#{'ALWELYYYKKL', 'ALGELSIDWGIEKYTDKLI'} 2 #999933
+#{'ALWETRQELGKKIKV', 'ACDAVGDQYTDKLI'} 2
+#{'ATWDDYYKKLF', 'AFRCFPSQADKLI'} 2
+#{'ATWDSPLNYYKKL', 'ALGELSPFLRSWGIDKLI', 'AAWDYIQYKKLF'}2
+
+colors_gdTcells_blood<-ifelse((gdTcells_blood_df$Var1=="{'ALWEGYKKL', 'AFTTFLLRYTDKLI', 'ACDNVAGRFYTDKLI'}"),"darkorchid",
+                              ifelse((gdTcells_blood_df$Var1=="{'ALWELYYYKKL', 'ALGELSIDWGIEKYTDKLI'}"),"#999933",
+                                     ifelse((gdTcells_blood_df$Var1=="{'ALWEEKKELGKKIKV', 'ACDTVGGSPDKLI'}"),"#009292",
+                                            ifelse((gdTcells_blood_df$Var1=="{'ALGELQHQFPHRGYGTDKLI', 'ALWEVRYKKLF'}"),"green",
+                                                   ifelse((gdTcells_blood_df$Var1=="{'ALWEDQELGKKIKV', 'ACDTAGGRGWDTRQM'}"),"orange",
+                                                          ifelse((gdTcells_blood_df$Var1=="{'ALWETRQELGKKIKV', 'ACDAVGDQYTDKLI'}"),"blueviolet",
+                                                                 ifelse((gdTcells_blood_df$Var1=={'ATWDDYYKKLF', 'AFRCFPSQADKLI'}),"darkgoldenrod1",
+                                                                        ifelse((gdTcells_blood_df$Var1=={'ATWDSPLNYYKKL', 'ALGELSPFLRSWGIDKLI', 'AAWDYIQYKKLF'}),"burlywood","grey"))))))))
+
+
+pie(gdTcells_muscle_df$freq_cloneGDaa,label=gdTcells_blood$freq_cloneGDaa)
+``` 
+
+
+#FoxP3 gene expression in blood
+```{r,FoxP3 in blood, results='hide',fig.width=16,fig.height=5}
+VlnPlot(May2022sce,features = "FOXP3", split.by = "tissue", group.by = "seurat_clusters", cols=tissue)
+``` 
+
+```{r,beforeaftertreament, results='hide',fig.width=16,fig.height=5}
+naiveplustreated<-readRDS("../naiveplustreated.resol1.5.rds")
+library(dittoSeq)
+dittoBarPlot(naiveplustreated,"seurat_clusters",group.by="patient_ID",split.by="treatment.status",)
+VlnPlot(naiveplustreated,features = "nCount_RNA", split.by = "treatment.status",group.by = "seurat_clusters")
+dittoFreqPlot(naiveplustreated,"seurat_clusters",sample.by = "patient_ID",group.by = "treatment.status")
+``` 
+
+```{r,DEG IBMvs others, results='hide',fig.width=16,fig.height=5}
+May2022sce.copy<-May2022sce
+diagnosis_comparision <- SetIdent(May2022sce.copy, value = "dx2020")
+genes_diagnosis_comparision<-FindAllMarkers(diagnosis_comparision,
+                               log2FC.threshold = 0.2,
+                               test.use = "wilcox",
+                               min.pct = 0.1,
+                               min.diff.pct = 0.2,
+                               only.pos = TRUE,
+                               max.cells.per.ident = 50,
+                               assay = "RNA") 
+
+genes_diagnosis_comparision$genes<-rownames(genes_diagnosis_comparision)
+genes_diagnosis_comparision   %>% top_n(-50, p_val) -> top50_genes
+genes_diagnosis_comparision   %>% top_n(-5, p_val) -> top5_genes
+genes_diagnosis_comparision   %>% top_n(-10, p_val) -> top10_genes
+mypar(2,5,mar=c(4,6,3,1))
+for(i in unique(top10_genes$cluster)){
+  barplot( sort( setNames(top10_genes$avg_log2FC, top10_genes$gene) [top10_genes$cluster == i], F),
+           horiz = T,las=1 ,main=paste0(i," vs. rest"),border = "white", yaxs="i" )
+  abline(v=c(0,0.25),lty=c(1,2))
+}
+
+VlnPlot(May2022sce,features = c("ITGAD","XCL2","XCL1","S100B","ERAP2","CXCL13","IFI44L","IFI44L","IFI6","XAF1","KLRD1","ICAM2","S1PR1","S1PR4"),group.by="dx2020")
+DoHeatmap(May2022sce,features = top10_genes)
+write.csv(genes_diagnosis_comparision,"genes_diagnosis_comparision.csv")
+
+``` 

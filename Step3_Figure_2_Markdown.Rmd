@@ -1,0 +1,53 @@
+---
+title: "Figure 2"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r,library, results='hide'}
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(dplyr)
+  library(cowplot)
+  library(ggplot2)
+  library(pheatmap)
+  library(enrichR)
+  library(rafalib)
+  library(ggraph)
+  library(clustree)
+  library(RColorBrewer)
+  library(scales)
+  library(dittoSeq)
+})
+seed=1234
+May2022sce<- readRDS("May2022sce.rds")
+```
+
+```{r,figure2, results='hide',fig.width=16,fig.height=5}
+my_cols <- c("0"="#999933","1"="#004949","2"="#009292","3"="#ff6db6","4"="#ffb6db",
+ "5"="#490092","6"="#006ddb","7"="#b66dff","8"="#6db6ff","9"="#b6dbff",
+ "10"="#920000","11"="#924900","12"="#db6d00","13"="burlywood2")
+
+my_cols2<- my_cols[order(as.integer(names(my_cols)))]
+tissue<-c("MUSL"="royalblue3","PB"="seagreen3")
+DimPlot(May2022sce,reduction = "umap_harmony",cols=my_cols2, split.by = "patient_ID")
+```
+
+```{r,figure 2d, results='hide',fig.width=16,fig.height=5}
+p1<-dittoBarPlot(May2022sce,"seurat_clusters",group.by = "patient_ID", split.by = "tissue",data.out = TRUE,color.panel =my_cols2 )
+freqtable<-p1$data
+#write.csv(freqtable,"10.5.22 New Figures/Figure2frequenciespercluster.csv")
+p1
+```
+
+```{r,figure2f, results='hide',fig.width=16,fig.height=5}
+DotPlot(May2022sce,features = c("ITGA4","CXCR6","CD69","ZNF683","TBX21","EOMES","TOX","BCL6","PRDM1","RUNX3","FOXP3","PDCD1","LAG3","ADGRG1","CX3CR1","TIGIT","ICOS","TNFRSF9","S1PR1","S1PR2","S1PR4","S1PR5","XCL1","DUSP6"),cols = c("white","darkgreen"))+theme(axis.text.x = element_text(angle = 45,hjust=1))
+
+DotPlot(May2022sce,features = c("FCGR3A","NCAM1","CX3CR1","ADGRG1","NKG7","KLRB1","KLRD1","KLRF1","KLRC1","PRF1","GZMB","GZMA","GZMH","GZMK","IFNG","CXCL13","ZNF683","EOMES","TBX21"),cols = c("white","darkgreen"))+theme(axis.text.x = element_text(angle = 45,hjust=1))
+
+```
+
+

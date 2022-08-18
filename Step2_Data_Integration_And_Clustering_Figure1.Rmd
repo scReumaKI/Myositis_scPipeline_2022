@@ -1,0 +1,231 @@
+---
+title: "Step2_Data_Integration_And_Clustering"
+output: html_document
+---
+```{r,setup, results='hide'}
+seed=1234
+finalfilt_noribo_noemptywells<- readRDS("finalfilt_noribo_may2022.rds")
+dim(finalfilt_noribo_noemptywells)
+```
+
+#Normalization, Scaling and PCA Analysis
+```{r,message='hide',warning='hide', results='hold',results='hold',fig.height=5,fig.width=16}
+finalfilt_noribo_noemptywells = NormalizeData(finalfilt_noribo_noemptywells) #by default uses scale.factor=10000
+finalfilt_noribo_noemptywells_genes <- rownames(finalfilt_noribo_noemptywells)
+finalfilt_noribo_noemptywells <- ScaleData(finalfilt_noribo_noemptywells, features =finalfilt_noribo_noemptywells_genes)
+
+suppressWarnings(suppressMessages(finalfilt_noribo_noemptywells <- FindVariableFeatures(finalfilt_noribo_noemptywells, selection.method = "vst", nfeatures = 2000 ,verbose = FALSE,assay = "RNA")))
+top20 <- head(VariableFeatures(finalfilt_noribo_noemptywells), 20)
+
+LabelPoints(plot = VariableFeaturePlot(finalfilt_noribo_noemptywells), points = top20, repel = TRUE)
+finalfilt_noribo_noemptywells <- RunPCA(finalfilt_noribo_noemptywells, npcs = 50, verbose = F) #by default uses the Variable features
+
+
+library(cowplot)
+plot_grid(ncol = 3,
+  DimPlot(finalfilt_noribo_noemptywells, reduction = "pca", group.by = "orig.ident",dims = 1:2),
+  DimPlot(finalfilt_noribo_noemptywells, reduction = "pca", group.by = "orig.ident",dims = 3:4),
+  DimPlot(finalfilt_noribo_noemptywells, reduction = "pca", group.by = "orig.ident",dims = 5:6) )
+VizDimLoadings(finalfilt_noribo_noemptywells, dims = 1:5, reduction = "pca",ncol = 5,balanced = T)
+ElbowPlot(finalfilt_noribo_noemptywells, reduction = "pca",ndims = 50)
+finalfilt_noribo_noemptywells <- RunUMAP(finalfilt_noribo_noemptywells, reduction = "pca", dims = 1:20,
+                   n.components=2,
+                   n.neighbors=30,
+                   n.epochs=200,
+                   min.dist=0.3,
+                   learning.rate=1,
+                   spread=1 )
+DimPlot(finalfilt_noribo_noemptywells,group.by = "seq_batch") # here we see there is a lot of batch effect in our data
+
+```
+
+#Data integration using Harmony Package
+We integrate the data due to batch effects since patients were sequenced in different batches and we want to get rid of this and keep only biological contrubution
+Dimensions to be used fro chosen 20 from the Elbow Plot
+```{r,message='hide',warning='hide', results='hold',results='hold',fig.height=5,fig.width=16}
+library(harmony)
+
+finalfilt_noribo_noemptywells_harmony <- RunHarmony(
+  finalfilt_noribo_noemptywells,
+  group.by.vars = "seq_batch",
+  dims.use = 1:20,
+  plot_convergence = TRUE,max.iter.harmony = 8) # number of iterations were chosen based on the convergence plot, after 8 there isnt any more contribution so 8 was enough
+
+finalfilt_noribo_noemptywells_harmony<-FindNeighbors(finalfilt_noribo_noemptywells_harmony,dims=1:20, reduction = "harmony",assay = "RNA")
+finalfilt_noribo_noemptywells_harmony <- RunUMAP(finalfilt_noribo_noemptywells_harmony, dims = 1:20, reduction = "harmony", reduction.name = "umap_harmony",return.model = T)
+#supplemantary figure for before& after data integration
+p1 <- DimPlot(finalfilt_noribo_noemptywells_harmony, reduction = "umap", group.by = "seq_batch")+ggtitle("UMAP raw_data")
+p2 <- DimPlot(finalfilt_noribo_noemptywells_harmony, reduction = "umap_harmony", group.by = "seq_batch")+ggtitle("UMAP Harmony")
+leg <- get_legend(p1)
+
+gridExtra::grid.arrange(
+  gridExtra::arrangeGrob(
+    p1 + NoLegend() + NoAxes(),
+    p2 + NoLegend() + NoAxes(),ncol = 2),
+  leg, ncol=2,widths=c(8,2)
+)
+
+p1 <- DimPlot(finalfilt_noribo_noemptywells_harmony, reduction = "umap_harmony", group.by = "seq_batch")+ggtitle("harmony")
+p2 <- DimPlot(finalfilt_noribo_noemptywells_harmony, reduction = "umap", group.by = "seq_batch")+ggtitle("no harmony")
+p1+p2
+
+#saveRDS(finalfilt_noribo_noemptywells_harmony,"May2022scewithtreated.rds")
+```
+
+#Clustering 
+We remove the cells from the second biopsies and only keep "naive" cells
+Afterwards we look at differet resolutions for the louvain algorithm.We looked at the difference of clustering in different resolutions and decided 1.5 was the best with biologically meaningful clusters.
+```{r,message='hide',warning='hide', results='hold',results='hold',fig.height=5,fig.width=16}
+finalfilt_noribo_noemptywells_harmony.naive<-subset(finalfilt_noribo_noemptywells_harmony,subset=treatment.status=="naive")
+DimPlot(finalfilt_noribo_noemptywells_harmony.naive, reduction = "umap_harmony", group.by = "seq_batch")
+
+
+finalfilt_noribo_noemptywells_harmony.naive<-FindNeighbors(finalfilt_noribo_noemptywells_harmony.naive,dims=1:20, reduction = "harmony",assay = "RNA")
+
+#finalfilt_noribo.harmony.naive <- RunUMAP(finalfilt_noribo.harmony.naive, dims = 1:20, reduction = "harmony", reduction.name = "umap_harmony",return.model = T)
+library(pheatmap)
+pheatmap(finalfilt_noribo_noemptywells_harmony.naive@graphs$RNA_snn[1:200,1:200],
+         col=c("white","black"),border_color = "grey90",
+         legend = F,cluster_rows = F,cluster_cols = F,fontsize = 2)
+
+# Clustering with louvain (algorithm 1)
+for (res in c( 0.1 , 0.25 , .5 , 1 , 1.5 , 2 )){
+  finalfilt_noribo_noemptywells_harmony.naive <- FindClusters(finalfilt_noribo_noemptywells_harmony.naive, graph.name = "RNA_snn", resolution = res , algorithm = 1)
+}
+
+plot_grid(ncol = 3,
+          DimPlot(finalfilt_noribo_noemptywells_harmony.naive, reduction = "umap_harmony", group.by= "RNA_snn_res.1")+ggtitle("Harmony_louvain_1"),
+                  DimPlot(finalfilt_noribo_noemptywells_harmony.naive, reduction = "umap_harmony", group.by = "RNA_snn_res.1.5")+ggtitle("Harmony_louvain_1.5"),
+                  DimPlot(finalfilt_noribo_noemptywells_harmony.naive, reduction = "umap_harmony", group.by = "RNA_snn_res.2")+ggtitle("Harmony_louvain_2")
+          )
+
+clustree(finalfilt_noribo_noemptywells_harmony.naive)
+
+finalfilt_noribo_noemptywells_harmony.naive.resol1.5<-FindClusters(finalfilt_noribo_noemptywells_harmony.naive, graph.name = "RNA_snn", resolution = 1.5 , algorithm = 1)
+DimPlot(finalfilt_noribo_noemptywells_harmony.naive.resol1.5,reduction = "umap_harmony")
+May2022sce<-finalfilt_noribo_noemptywells_harmony.naive.resol1.5
+```
+
+
+#The Colors we have chosen for the clusters and tissues
+```{r,fig.height=5,fig.width=10}
+library(RColorBrewer)
+library(scales)
+safe_colorblind_palette <- c("#88CCEE", "#CC6677", "#DDCC77", "#117733", "#332288", "#AA4499", 
+                             "#44AA99", "#999933", "#882255", "#661100", "#6699CC", "#888888")
+show_col(safe_colorblind_palette)
+
+pal <- c("#000000","#004949","#009292","#ff6db6","#ffb6db",
+ "#490092","#006ddb","#b66dff","#6db6ff","#b6dbff",
+ "#920000","#924900","#db6d00","#24ff24","#ffff6d")
+show_col(pal)
+
+#darkolivegreen1
+
+myositiscolors<-c("#999933","#004949","#009292","#ff6db6","#ffb6db",
+ "#490092","#006ddb","#b66dff","#6db6ff","#b6dbff",
+ "#920000","#924900","#db6d00","darkolivegreen1","lightsalmon","burlywood2")
+show_col(myositiscolors)
+#https://www.colorcodepicker.com/
+myositiscolorsforditto<-c("#f4847c","#0bbec5","#999933","#004949","#009292","#ff6db6","#ffb6db",
+ "#490092","#006ddb","#b66dff","#6db6ff","#b6dbff",
+ "#920000","#924900","#db6d00","darkolivegreen1","lightsalmon","burlywood2")
+
+my_cols <- c("0"="#999933","1"="#004949","2"="#009292","3"="#ff6db6","4"="#ffb6db",
+ "5"="#490092","6"="#006ddb","7"="#b66dff","8"="#6db6ff","9"="#b6dbff",
+ "10"="#920000","11"="#924900","12"="#db6d00","13"="burlywood2")
+
+my_cols2<- my_cols[order(as.integer(names(my_cols)))]
+
+
+
+colrs <- brewer.pal.info[brewer.pal.info$colorblind == TRUE, ]
+col_vec = unlist(mapply(brewer.pal, colrs$maxcolors, rownames(colrs)))
+show_col(col_vec)
+DimPlot(finalfilt_noribo_noemptywells_harmony.naive.resol1.5, reduction = "umap_harmony",cols=my_cols2)
+
+tissue<-c("MUSL"="royalblue3","PB"="seagreen3")
+DimPlot(finalfilt_noribo_noemptywells_harmony.naive.resol1.5, reduction = "umap_harmony",group.by = "tissue", cols = tissue)
+
+#332288
+#AA4499
+```
+
+
+#Finding DE genes in clusters
+```{r,message='hide',warning='hide', results='hold',results='hold',fig.height=5,fig.width=16}
+
+#we preivously selected resol1.5 for the clustering so we only use that one
+
+markers_genes_resol1.5 <- FindAllMarkers(May2022sce,
+                               log2FC.threshold = 0.2,
+                               test.use = "wilcox",
+                               min.pct = 0.1,
+                               min.diff.pct = 0.2,
+                               only.pos = TRUE,
+                               max.cells.per.ident = 50,
+                               assay = "RNA") # all the parameters are default
+
+markers_genes_resol1.5 %>% group_by(cluster)  %>% top_n(-5, p_val) -> top10_resol1.5
+top10_resol1.5
+top5genes<-top10_resol1.5$gene
+top5genes<-c(top5genes,"CD4","CD8B","CD8A") # We also add amnually the CD4, CD8 genes to the heatmap
+
+mypar(2,5,mar=c(4,6,3,1))
+for(i in unique(top10_resol1.5$cluster)){
+  barplot( sort( setNames(top10_resol1.5$avg_log2FC, top10_resol1.5$gene) [top10_resol1.5$cluster == i], F),
+           horiz = T,las=1 ,main=paste0(i," vs. rest"),border = "white", yaxs="i" )
+  abline(v=c(0,0.25),lty=c(1,2))
+}
+
+finalfilt_noribo_noemptywells_harmony.naive.resol1.5.copy <- ScaleData(finalfilt_noribo_noemptywells_harmony.naive.resol1.5, features = unique(top5genes), assay = "RNA") # the data is scaled based on the top5genes for visualization purposes
+
+
+DoHeatmap(finalfilt_noribo_noemptywells_harmony.naive.resol1.5.copy, features = unique(top5genes),label=TRUE,group.colors =my_cols2)+scale_fill_viridis()+ theme(text = element_text(size = 10))
+#based on clusters and DE genes we go with resolution 1.5
+
+
+#dittoHeatmap(finalfilt_noribo_noemptywells_harmony.naive.resol1.5.copy,unique(top10_resol1.5$gene), annot.by=c("tissue","seurat_clusters"),order.by=c("tissue","seurat_clusters"),annot.colors = myositiscolorsforditto,scaled.to.max = TRUE, heatmap.colors.max.scaled = colorRampPalette(c("darkblue","mediumaquamarine" ,"yellow"))(25))
+
+#write.csv(top10_resol1.5,"top10_resol1.5.csv")
+#write.csv(markers_genes_resol1.5,"markers_genes_resol1.5.csv")
+#saveRDS(May2022sce,"May2022sce.rds")
+```
+
+#DE genes between Muscle vs Blood cells
+```{r,fig.height=5,fig.width=10}
+# Compare muscle vs blood
+May2022sce.copy<-May2022sce
+tissue_comparision <- SetIdent(May2022sce.copy, value = "tissue") # first we set the idents to be tissues instead of clusters
+
+#Compute differential expression
+genespertissue<-FindMarkers(tissue_comparision, ident.1="MUSL", ident.2="PB",min.pct=0.2) # min.pct to match the DE in FindAllMarkers
+genespertissue$genes<-rownames(genespertissue)
+genespertissue   %>% top_n(-50, p_val) -> top50_genes
+genespertissue   %>% top_n(-5, p_val) -> top5_genes
+
+top5_genes$genes<-rownames(top5_genes)
+top50_genes$genes<-rownames(top50_genes)
+top50_gene_names<-rownames(top50_genes)
+top50_gene_names<-c(top50_gene_names,"CD4","CD8B")
+May2022sce.copy2 <- ScaleData(May2022sce.copy, features = as.character(unique(top50_gene_names)), assay = "RNA")
+DoHeatmap(May2022sce.copy2, features = unique(top50_genes$genes),group.by = "tissue")+scale_fill_viridis()
+DoHeatmap(May2022sce.copy2, features = unique(top50_gene_names),group.by = "tissue")+scale_fill_gradient2( low = rev(c('#d1e5f0','#67a9cf','#2166ac')), mid = "white", high = rev(c('#b2182b','#ef8a62','#fddbc7')), midpoint = 0, guide = "colourbar", aesthetics = "fill")
+
+
+
+#write.csv(genespertissue,"genespertissue_210422.csv")
+VlnPlot(May2022sce.copy2, features = c("CXCR4","LMNA","CREM","TXNIP"),ncol = 2,group.by = "tissue",assay = "RNA", pt.size = .1,cols = tissue)
+
+FeaturePlot(May2022sce,features = c("CD3D"),reduction="umap_harmony",cols = c("grey", "dodgerblue4"))
+FeaturePlot(May2022sce,features = c("CD4"),reduction="umap_harmony",cols=c("grey","dodgerblue4"))
+FeaturePlot(May2022sce,features = c("CD8B"),reduction="umap_harmony")
+FeaturePlot(May2022sce,features = c("CD8A"),reduction="umap_harmony")
+FeaturePlot(May2022sce,features = c("CD8B"),reduction="umap_harmony")
+plot_density(May2022sce, "CD4",reduction = "umap_harmony")
+plot_density(May2022sce, "CD3D",reduction = "umap_harmony")
+plot_density(May2022sce, "CD8A",reduction = "umap_harmony")
+plot_density(May2022sce, "CD8B",reduction = "umap_harmony")
+
+
+```
